@@ -1,22 +1,68 @@
-document.open();
-document.write(`<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>Zero-RAM Local Folder Launcher</title>
   <style>
-    body { font-family: system-ui, sans-serif; background: #121212; color: #eee; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-    .card { background: #1e1e1e; padding: 28px; border-radius: 12px; max-width: 480px; width: 100%; border: 1px solid #333; text-align: center; }
-    button, label { display: inline-block; background: #28a745; color: white; padding: 12px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; font-size: 1rem; margin-top: 12px; }
-    input[type="file"] { display: none; }
-    select { width: 100%; padding: 10px; margin-top: 12px; border-radius: 6px; background: #2a2a2a; color: white; border: 1px solid #444; }
-    #status { margin-top: 14px; font-size: 0.9rem; color: #aaa; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #121212;
+      color: #eee;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background: #1e1e1e;
+      padding: 28px;
+      border-radius: 12px;
+      max-width: 480px;
+      width: 100%;
+      border: 1px solid #333;
+      text-align: center;
+      box-sizing: border-box;
+    }
+    button, label {
+      display: inline-block;
+      background: #28a745;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      font-size: 1rem;
+      margin-top: 12px;
+    }
+    button:hover, label:hover {
+      background: #218838;
+    }
+    input[type="file"] {
+      display: none;
+    }
+    select {
+      width: 100%;
+      padding: 10px;
+      margin-top: 12px;
+      border-radius: 6px;
+      background: #2a2a2a;
+      color: white;
+      border: 1px solid #444;
+    }
+    #status {
+      margin-top: 14px;
+      font-size: 0.9rem;
+      color: #aaa;
+      word-break: break-word;
+    }
   </style>
 </head>
 <body>
   <div class="card">
     <h2>🚀 Zero-RAM Local Game Launcher</h2>
-    <p>Select your unzipped game folder. Files stream directly from disk on demand (no 1.7 GB RAM crash).</p>
+    <p>Select your unzipped game folder. Files stream directly from disk on demand.</p>
     <label for="folder">Select Unzipped Folder</label>
     <input type="file" id="folder" webkitdirectory directory multiple>
     <div id="controls" style="display:none;">
@@ -25,25 +71,55 @@ document.write(`<!DOCTYPE html>
     </div>
     <div id="status"></div>
   </div>
+
   <script>
     const folderInput = document.getElementById("folder");
     const controls = document.getElementById("controls");
     const htmlSelect = document.getElementById("html-select");
     const launchBtn = document.getElementById("launch-btn");
     const status = document.getElementById("status");
+
     let fileMap = new Map();
     const blobCache = new Map();
+
+    const MIME_TYPES = {
+      wasm: "application/wasm",
+      js: "application/javascript",
+      mjs: "application/javascript",
+      json: "application/json",
+      css: "text/css",
+      html: "text/html",
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      webp: "image/webp",
+      gif: "image/gif",
+      svg: "image/svg+xml",
+      ogg: "audio/ogg",
+      mp3: "audio/mpeg",
+      wav: "audio/wav",
+      mp4: "video/mp4",
+      webm: "video/webm",
+      data: "application/octet-stream",
+      pck: "application/octet-stream"
+    };
 
     folderInput.addEventListener("change", e => {
       fileMap.clear();
       blobCache.clear();
       htmlSelect.innerHTML = "";
+
       for (const f of e.target.files) {
-        const rel = (f.webkitRelativePath || f.name).replace(/\\\\/g, "/");
+        const rel = (f.webkitRelativePath || f.name).replace(/\\/g, "/");
         fileMap.set(rel, f);
       }
-      const htmls = Array.from(fileMap.keys()).filter(p => /\\.html?$/i.test(p));
-      if (!htmls.length) { status.textContent = "No HTML file found in that folder."; return; }
+
+      const htmls = Array.from(fileMap.keys()).filter(p => /\.html?$/i.test(p));
+      if (!htmls.length) {
+        status.textContent = "No HTML file found in that folder.";
+        return;
+      }
+
       htmls.sort((a, b) => a.split("/").length - b.split("/").length);
       for (const h of htmls) {
         const opt = document.createElement("option");
@@ -51,33 +127,51 @@ document.write(`<!DOCTYPE html>
         opt.textContent = h;
         htmlSelect.appendChild(opt);
       }
+
       controls.style.display = "block";
-      status.textContent = "Indexed " + fileMap.size + " files (0 MB RAM used).";
+      status.textContent = `Indexed ${fileMap.size} files (0 MB RAM used).`;
     });
 
     function getBlobUrl(relPath) {
       if (blobCache.has(relPath)) return blobCache.get(relPath);
       const file = fileMap.get(relPath);
       if (!file) return null;
-      const url = URL.createObjectURL(file);
+
+      const ext = relPath.split(".").pop().toLowerCase();
+      const mime = file.type || MIME_TYPES[ext] || "application/octet-stream";
+      const typedBlob = new Blob([file], { type: mime });
+      const url = URL.createObjectURL(typedBlob);
       blobCache.set(relPath, url);
       return url;
     }
 
     function resolveAsset(baseDir, rawUrl) {
       if (!rawUrl || /^(https?:|data:|blob:|#|javascript:)/i.test(rawUrl.trim())) return null;
-      const clean = decodeURIComponent(rawUrl.split(/[?#]/)[0]).replace(/\\\\/g, "/");
+
+      let clean = rawUrl.split(/[?#]/)[0];
+      try { clean = decodeURIComponent(clean); } catch {}
+      clean = clean.replace(/\\/g, "/");
+
       const allKeys = Array.from(fileMap.keys());
-      const candidates = [clean.replace(/^\\.?\\//, ""), baseDir + clean.replace(/^\\.?\\//, "")];
+      const strippedRel = clean.replace(/^(\.\.\/|\.\/|\/)+/, "");
+      const candidates = [
+        clean.replace(/^\.?\//, ""),
+        baseDir + clean.replace(/^\.?\//, ""),
+        strippedRel,
+        baseDir + strippedRel
+      ];
+
       for (const c of candidates) {
         if (fileMap.has(c)) return c;
         const lower = c.toLowerCase();
         const hit = allKeys.find(k => k.toLowerCase() === lower);
         if (hit) return hit;
       }
-      const suffix = "/" + clean.replace(/^(\\.\\.\\/|\\.\\/|\\/)+/, "").toLowerCase();
+
+      const suffix = "/" + strippedRel.toLowerCase();
       const suffixHits = allKeys.filter(k => k.toLowerCase().endsWith(suffix));
       if (suffixHits.length === 1) return suffixHits[0];
+
       return null;
     }
 
@@ -85,6 +179,7 @@ document.write(`<!DOCTYPE html>
       const entry = htmlSelect.value;
       const baseDir = entry.includes("/") ? entry.slice(0, entry.lastIndexOf("/") + 1) : "";
       const htmlText = await fileMap.get(entry).text();
+
       const parser = new DOMParser();
       const doc = parser.parseFromString(htmlText, "text/html");
 
@@ -95,20 +190,47 @@ document.write(`<!DOCTYPE html>
       }
 
       const shim = doc.createElement("script");
-      shim.textContent = \`
-        window.__getLocalAssetUrl = (url) => window.opener && window.opener.__resolveFromHost(url);
-        const origFetch = window.fetch.bind(window);
-        window.fetch = (input, init) => {
-          const url = typeof input === "string" ? input : input?.url;
-          const blobUrl = window.__getLocalAssetUrl(url);
-          return origFetch(blobUrl || input, init);
-        };
-        const origOpen = XMLHttpRequest.prototype.open;
-        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-          const blobUrl = window.__getLocalAssetUrl(url);
-          return origOpen.call(this, method, blobUrl || url, ...rest);
-        };
-      \`;
+      shim.textContent = `
+        (function() {
+          const resolve = (url) => {
+            try { return window.opener && window.opener.__resolveFromHost(url); }
+            catch { return null; }
+          };
+
+          const origFetch = window.fetch.bind(window);
+          window.fetch = function(input, init) {
+            const rawUrl = typeof input === "string" ? input : (input && input.url);
+            const blobUrl = resolve(rawUrl);
+            if (blobUrl) return origFetch(blobUrl, init);
+            return origFetch(input, init);
+          };
+
+          const origOpen = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+            const blobUrl = resolve(url);
+            return origOpen.call(this, method, blobUrl || url, ...rest);
+          };
+
+          for (const proto of [
+            window.HTMLImageElement && HTMLImageElement.prototype,
+            window.HTMLMediaElement && HTMLMediaElement.prototype,
+            window.HTMLSourceElement && HTMLSourceElement.prototype,
+            window.HTMLScriptElement && HTMLScriptElement.prototype
+          ]) {
+            if (!proto) continue;
+            const desc = Object.getOwnPropertyDescriptor(proto, "src");
+            if (!desc || !desc.set) continue;
+            Object.defineProperty(proto, "src", {
+              get: desc.get,
+              set: function(val) {
+                return desc.set.call(this, resolve(val) || val);
+              },
+              configurable: true,
+              enumerable: true
+            });
+          }
+        })();
+      `;
       doc.head.insertBefore(shim, doc.head.firstChild);
 
       window.__resolveFromHost = (url) => {
@@ -117,11 +239,16 @@ document.write(`<!DOCTYPE html>
       };
 
       const win = window.open("about:blank", "_blank");
+      if (!win) {
+        status.textContent = "Pop-up blocked! Click the pop-up icon in your address bar and allow pop-ups.";
+        return;
+      }
       win.document.open();
-      win.document.write("<!DOCTYPE html>\\n" + doc.documentElement.outerHTML);
+      win.document.write("<!DOCTYPE html>\n" + doc.documentElement.outerHTML);
       win.document.close();
     });
-  </scr` + `ipt>
+  </script>
 </body>
-</html>`);
-document.close();
+</html>
+
+
