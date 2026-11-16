@@ -1,0 +1,127 @@
+document.open();
+document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Zero-RAM Local Folder Launcher</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #121212; color: #eee; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+    .card { background: #1e1e1e; padding: 28px; border-radius: 12px; max-width: 480px; width: 100%; border: 1px solid #333; text-align: center; }
+    button, label { display: inline-block; background: #28a745; color: white; padding: 12px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; border: none; font-size: 1rem; margin-top: 12px; }
+    input[type="file"] { display: none; }
+    select { width: 100%; padding: 10px; margin-top: 12px; border-radius: 6px; background: #2a2a2a; color: white; border: 1px solid #444; }
+    #status { margin-top: 14px; font-size: 0.9rem; color: #aaa; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>🚀 Zero-RAM Local Game Launcher</h2>
+    <p>Select your unzipped game folder. Files stream directly from disk on demand (no 1.7 GB RAM crash).</p>
+    <label for="folder">Select Unzipped Folder</label>
+    <input type="file" id="folder" webkitdirectory directory multiple>
+    <div id="controls" style="display:none;">
+      <select id="html-select"></select>
+      <button id="launch-btn">Launch Game</button>
+    </div>
+    <div id="status"></div>
+  </div>
+  <script>
+    const folderInput = document.getElementById("folder");
+    const controls = document.getElementById("controls");
+    const htmlSelect = document.getElementById("html-select");
+    const launchBtn = document.getElementById("launch-btn");
+    const status = document.getElementById("status");
+    let fileMap = new Map();
+    const blobCache = new Map();
+
+    folderInput.addEventListener("change", e => {
+      fileMap.clear();
+      blobCache.clear();
+      htmlSelect.innerHTML = "";
+      for (const f of e.target.files) {
+        const rel = (f.webkitRelativePath || f.name).replace(/\\\\/g, "/");
+        fileMap.set(rel, f);
+      }
+      const htmls = Array.from(fileMap.keys()).filter(p => /\\.html?$/i.test(p));
+      if (!htmls.length) { status.textContent = "No HTML file found in that folder."; return; }
+      htmls.sort((a, b) => a.split("/").length - b.split("/").length);
+      for (const h of htmls) {
+        const opt = document.createElement("option");
+        opt.value = h;
+        opt.textContent = h;
+        htmlSelect.appendChild(opt);
+      }
+      controls.style.display = "block";
+      status.textContent = "Indexed " + fileMap.size + " files (0 MB RAM used).";
+    });
+
+    function getBlobUrl(relPath) {
+      if (blobCache.has(relPath)) return blobCache.get(relPath);
+      const file = fileMap.get(relPath);
+      if (!file) return null;
+      const url = URL.createObjectURL(file);
+      blobCache.set(relPath, url);
+      return url;
+    }
+
+    function resolveAsset(baseDir, rawUrl) {
+      if (!rawUrl || /^(https?:|data:|blob:|#|javascript:)/i.test(rawUrl.trim())) return null;
+      const clean = decodeURIComponent(rawUrl.split(/[?#]/)[0]).replace(/\\\\/g, "/");
+      const allKeys = Array.from(fileMap.keys());
+      const candidates = [clean.replace(/^\\.?\\//, ""), baseDir + clean.replace(/^\\.?\\//, "")];
+      for (const c of candidates) {
+        if (fileMap.has(c)) return c;
+        const lower = c.toLowerCase();
+        const hit = allKeys.find(k => k.toLowerCase() === lower);
+        if (hit) return hit;
+      }
+      const suffix = "/" + clean.replace(/^(\\.\\.\\/|\\.\\/|\\/)+/, "").toLowerCase();
+      const suffixHits = allKeys.filter(k => k.toLowerCase().endsWith(suffix));
+      if (suffixHits.length === 1) return suffixHits[0];
+      return null;
+    }
+
+    launchBtn.addEventListener("click", async () => {
+      const entry = htmlSelect.value;
+      const baseDir = entry.includes("/") ? entry.slice(0, entry.lastIndexOf("/") + 1) : "";
+      const htmlText = await fileMap.get(entry).text();
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlText, "text/html");
+
+      for (const el of doc.querySelectorAll("[src], link[href]")) {
+        const attr = el.hasAttribute("src") ? "src" : "href";
+        const resolved = resolveAsset(baseDir, el.getAttribute(attr));
+        if (resolved) el.setAttribute(attr, getBlobUrl(resolved));
+      }
+
+      const shim = doc.createElement("script");
+      shim.textContent = \`
+        window.__getLocalAssetUrl = (url) => window.opener && window.opener.__resolveFromHost(url);
+        const origFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = typeof input === "string" ? input : input?.url;
+          const blobUrl = window.__getLocalAssetUrl(url);
+          return origFetch(blobUrl || input, init);
+        };
+        const origOpen = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+          const blobUrl = window.__getLocalAssetUrl(url);
+          return origOpen.call(this, method, blobUrl || url, ...rest);
+        };
+      \`;
+      doc.head.insertBefore(shim, doc.head.firstChild);
+
+      window.__resolveFromHost = (url) => {
+        const resolved = resolveAsset(baseDir, url);
+        return resolved ? getBlobUrl(resolved) : null;
+      };
+
+      const win = window.open("about:blank", "_blank");
+      win.document.open();
+      win.document.write("<!DOCTYPE html>\\n" + doc.documentElement.outerHTML);
+      win.document.close();
+    });
+  </scr` + `ipt>
+</body>
+</html>`);
+document.close();
